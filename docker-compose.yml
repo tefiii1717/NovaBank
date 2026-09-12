@@ -1,0 +1,94 @@
+# Servicios implementados por Yuly (frontend, coreografía y sus dos servicios de
+# dominio). Los servicios de Tefi (Cuentas y Saldos, Riesgo y Antifraude, la Saga
+# Orquestada con Prefect) se agregan más abajo, comentados, para que ella los
+# complete sin que esto choque con su propio trabajo — ver docs/CONTRATO_EVENTOS.md.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: novabank-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  pasarela-interbancaria:
+    build: ./services/pasarela-interbancaria
+    container_name: novabank-pasarela-interbancaria
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      PASARELA_DB_PATH: /data/pasarela.db
+      PASARELA_DELAY_MIN: "2"
+      PASARELA_DELAY_MAX: "4"
+    volumes:
+      - pasarela_data:/data
+    ports:
+      - "8300:8300"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  gateway-coreografia:
+    build: ./services/gateway-coreografia
+    container_name: novabank-gateway-coreografia
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      GATEWAY_DB_PATH: /data/gateway_coreografia.db
+    volumes:
+      - gateway_coreografia_data:/data
+    ports:
+      - "8100:8100"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build: ./frontend
+    container_name: novabank-frontend
+    environment:
+      VITE_GATEWAY_COREOGRAFIA_URL: http://localhost:8100
+      VITE_GATEWAY_ORQUESTADA_URL: http://localhost:8200
+    ports:
+      - "5173:5173"
+    depends_on:
+      - gateway-coreografia
+
+  # ------------------------------------------------------------------------
+  # Servicios de Tefi — agregar aquí cuando estén listos (no tocar arriba):
+  #
+  # cuentas-y-saldos:
+  #   build: ./services/cuentas-y-saldos
+  #   environment:
+  #     REDIS_URL: redis://redis:6379/0
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #
+  # riesgo-antifraude:
+  #   build: ./services/riesgo-antifraude
+  #   environment:
+  #     REDIS_URL: redis://redis:6379/0
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #
+  # prefect-server: (o el que uses para la orquestación)
+  #   image: prefecthq/prefect:2-latest
+  #   command: prefect server start --host 0.0.0.0
+  #   ports:
+  #     - "4200:4200"
+  #
+  # api-gateway-orquestado:
+  #   build: ./services/api-gateway-orquestado
+  #   ports:
+  #     - "8200:8200"
+  #   depends_on:
+  #     - prefect-server
+  # ------------------------------------------------------------------------
+
+volumes:
+  pasarela_data:
+  gateway_coreografia_data:
