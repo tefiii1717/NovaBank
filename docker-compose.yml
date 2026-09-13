@@ -1,7 +1,12 @@
-# Servicios implementados por Yuly (frontend, coreografía y sus dos servicios de
-# dominio). Los servicios de Tefi (Cuentas y Saldos, Riesgo y Antifraude, la Saga
-# Orquestada con Prefect) se agregan más abajo, comentados, para que ella los
-# complete sin que esto choque con su propio trabajo — ver docs/CONTRATO_EVENTOS.md.
+# Stack completo NovaBank: servicios de Yuly (frontend, coreografía, pasarela) +
+# servicios de Tefi (cuentas, riesgo, saga orquestada con Prefect). Ver
+# docs/CONTRATO_EVENTOS.md para el contrato de eventos/API compartido.
+#
+# LIMITACIÓN CONOCIDA (ver README.md "Estado actual"):
+#   - accounts y risk todavía no escuchan saga.eventos en Redis, así que el modo
+#     Coreografiada del frontend no tiene con quién completar la saga real
+#     todavía (se probó con eventos sintéticos, ver scripts/probar_cp_coreografia.py).
+#     El modo Orquestada sí queda completo: :8200 expone el flow de Prefect.
 
 services:
   redis:
@@ -56,38 +61,52 @@ services:
     depends_on:
       - gateway-coreografia
 
-  # ------------------------------------------------------------------------
-  # Servicios de Tefi — agregar aquí cuando estén listos (no tocar arriba):
-  #
-  # cuentas-y-saldos:
-  #   build: ./services/cuentas-y-saldos
-  #   environment:
-  #     REDIS_URL: redis://redis:6379/0
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #
-  # riesgo-antifraude:
-  #   build: ./services/riesgo-antifraude
-  #   environment:
-  #     REDIS_URL: redis://redis:6379/0
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #
-  # prefect-server: (o el que uses para la orquestación)
-  #   image: prefecthq/prefect:2-latest
-  #   command: prefect server start --host 0.0.0.0
-  #   ports:
-  #     - "4200:4200"
-  #
-  # api-gateway-orquestado:
-  #   build: ./services/api-gateway-orquestado
-  #   ports:
-  #     - "8200:8200"
-  #   depends_on:
-  #     - prefect-server
-  # ------------------------------------------------------------------------
+  # --- Servicios de Tefi ---------------------------------------------------
+
+  accounts:
+    build: ./services/accounts
+    container_name: novabank-accounts
+    ports:
+      - "8001:8001"
+
+  risk:
+    build: ./services/risk
+    container_name: novabank-risk
+    ports:
+      - "8002:8002"
+
+  clearing-stub:
+    build: ./services/clearing-stub
+    container_name: novabank-clearing-stub
+    ports:
+      - "8003:8003"
+
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: novabank-prefect-server
+    command: prefect server start --host 0.0.0.0
+    ports:
+      - "4200:4200"
+
+  saga-orchestrator:
+    build: ./saga-orchestrator
+    container_name: novabank-saga-orchestrator
+    environment:
+      PREFECT_API_URL: http://prefect-server:4200/api
+      ACCOUNTS_URL: http://accounts:8001
+      RISK_URL: http://risk:8002
+      CLEARING_URL: http://clearing-stub:8003
+    ports:
+      - "8200:8200"
+    depends_on:
+      - accounts
+      - risk
+      - clearing-stub
+      - prefect-server
+    # api.py expone POST /transferencia y GET /transferencia/{id}/estado
+    # (mismo contrato que gateway-coreografia). flows.py también se puede
+    # seguir disparando manualmente dentro del contenedor:
+    #   docker compose exec saga-orchestrator python flows.py CTA-001 CTA-002 100 demo-1
 
 volumes:
   pasarela_data:

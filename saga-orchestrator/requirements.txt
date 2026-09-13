@@ -1,2 +1,4 @@
 prefect
 requests
+fastapi
+uvicorn

@@ -13,18 +13,24 @@ interbancaria, bus de eventos y saga coreografiada).
 | Componente | Dueño | Estado |
 |---|---|---|
 | `frontend/` (React + Tailwind) | Yuly | ✅ Implementado |
-| `services/pasarela-interbancaria/` (Clearing Gateway) | Yuly | ✅ Implementado |
+| `services/pasarela-interbancaria/` (Clearing Gateway, reactiva a eventos) | Yuly | ✅ Implementado |
 | `services/gateway-coreografia/` (entrypoint + read model de la saga coreografiada) | Yuly | ✅ Implementado |
 | `docs/CONTRATO_EVENTOS.md` (contrato de eventos y API) | Yuly | ✅ Implementado |
-| `services/cuentas-y-saldos/` (Account & Ledger) | Tefi | ⬜ Pendiente |
-| `services/riesgo-antifraude/` | Tefi | ⬜ Pendiente |
-| Saga Orquestada (Prefect) + API Gateway `:8200` | Tefi | ⬜ Pendiente |
+| `services/accounts/` (Cuentas y Saldos) | Tefi | ✅ Implementado |
+| `services/risk/` (Riesgo y Antifraude) | Tefi | ✅ Implementado |
+| `services/clearing-stub/` (stub de pasarela para el modo orquestado) | Tefi | ✅ Implementado |
+| `saga-orchestrator/flows.py` (saga orquestada con Prefect) | Tefi | ✅ Implementado |
+| `saga-orchestrator/api.py` (API Gateway orquestada, puerto `:8200`) | Yuly (wrapper sobre el flow de Tefi) | ✅ Implementado |
 
-**Importante:** sin los servicios de Cuentas y Riesgo, la saga coreografiada no
-puede completarse de punta a punta con datos reales — pero todo lo que depende de
-Yuly está construido, probado y verificado (ver "Cómo se verificó" más abajo). El
-contrato de eventos (`docs/CONTRATO_EVENTOS.md`) es lo único que Tefi necesita
-respetar para que sus servicios encajen sin tocar nada de lo ya construido.
+**Los dos modos (Coreografiada y Orquestada) funcionan de punta a punta contra
+el stack real** — verificado con los 5 casos de prueba en ambos modos (ver
+"Cómo se verificó" más abajo). La única limitación conocida: `accounts` y
+`risk` todavía solo responden a llamadas HTTP directas (para la orquestación);
+no escuchan `saga.eventos` en Redis, así que el modo Coreografiada se probó con
+eventos sintéticos que simulan lo que esos dos servicios emitirían (ver
+`docs/CONTRATO_EVENTOS.md` y `scripts/probar_cp_coreografia.py`) — conectarlos
+de verdad al bus de eventos es el próximo paso para que la coreografía corra
+100% con servicios reales en vez de dobles de prueba.
 
 ## Arquitectura (las 4 capas del taller)
 
@@ -32,13 +38,17 @@ respetar para que sus servicios encajen sin tocar nada de lo ya construido.
    switches para forzar cada tipo de fallo (CP-02 a CP-04), selector de modo
    (Coreografiada / Orquestada) y panel de estado en tiempo real por *polling*.
 2. **API Gateway**: en modo coreografiado es `services/gateway-coreografia`
-   (puerto `8100`); en modo orquestado lo expone Tefi (puerto `8200`) — mismo
-   contrato HTTP en ambos, ver `docs/CONTRATO_EVENTOS.md` §6.
-3. **Microservicios de dominio bancario**: `pasarela-interbancaria` (Yuly, este
-   repo) + `cuentas-y-saldos` y `riesgo-antifraude` (Tefi, pendientes).
+   (puerto `8100`); en modo orquestado es `saga-orchestrator/api.py` (puerto
+   `8200`) — mismo contrato HTTP en ambos, ver `docs/CONTRATO_EVENTOS.md` §6.
+3. **Microservicios de dominio bancario**: `pasarela-interbancaria` (Yuly) +
+   `accounts` y `risk` (Tefi) + `clearing-stub` (Tefi, pasarela síncrona para
+   el flow orquestado).
 4. **Observabilidad**: en coreografía, cada paso queda en la tabla `historial`
-   de `gateway-coreografia` con timestamp y servicio de origen, visible en el
-   timeline del frontend; en orquestación, la UI de Prefect (Tefi).
+   de `gateway-coreografia` con timestamp y servicio de origen; en
+   orquestación, el flow corre como un `@flow`/`@task` de Prefect (UI en
+   `http://localhost:4200`) y `saga-orchestrator/api.py` traduce el resultado
+   al mismo formato de `historial` para que el frontend pinte igual en ambos
+   modos.
 
 ## Cómo correr todo
 
@@ -48,13 +58,17 @@ Requiere Docker Desktop.
 docker compose up -d --build
 ```
 
-Esto levanta: `redis`, `pasarela-interbancaria` (`:8300`), `gateway-coreografia`
-(`:8100`) y `frontend` (`:5173`). Abre `http://localhost:5173`.
+Esto levanta los 9 servicios: `redis`, `pasarela-interbancaria` (`:8300`),
+`gateway-coreografia` (`:8100`), `accounts` (`:8001`), `risk` (`:8002`),
+`clearing-stub` (`:8003`), `prefect-server` (`:4200`), `saga-orchestrator`
+(`:8200`) y `frontend` (`:5173`). Abre `http://localhost:5173`.
 
-Los servicios de Tefi (Cuentas, Riesgo, Prefect, API Gateway orquestado) se
-agregan en `docker-compose.yml`, en el bloque comentado al final del archivo —
-sin ellos, el modo "Orquestada" del frontend y el flujo coreografiado completo
-(que necesita Cuentas y Riesgo reaccionando) no van a completar la transacción.
+`accounts` no trae cuentas de prueba por defecto — créalas antes de probar:
+
+```bash
+curl -X POST http://localhost:8001/cuentas -H "Content-Type: application/json" -d '{"numero_cuenta":"CTA-001","saldo_inicial":1000}'
+curl -X POST http://localhost:8001/cuentas -H "Content-Type: application/json" -d '{"numero_cuenta":"CTA-002","saldo_inicial":100}'
+```
 
 ### Correr solo el backend de Yuly sin Docker (desarrollo)
 
@@ -79,34 +93,52 @@ cd frontend && npm install && npm run dev
 | CP-04 | Timeout de red externa | Activar "CP-04 · Forzar timeout de red" |
 | CP-05 | Idempotencia / reintento | Botón "Reusar último ID (CP-05)" y reenviar |
 
-CP-02, CP-03 y el resto de la saga completa (débito/crédito reales) requieren los
-servicios de Cuentas y Riesgo de Tefi corriendo y suscritos al mismo canal Redis
-(`saga.eventos`) — ver `docs/CONTRATO_EVENTOS.md`.
+Los 5 casos están verificados contra el modo **Orquestada** real (Prefect +
+accounts + risk + clearing-stub, sin dobles de prueba). En **Coreografiada**,
+CP-04 y CP-05 corren contra la Pasarela real; CP-01/02/03 necesitan que
+`accounts`/`risk` reaccionen a `saga.eventos` (todavía no lo hacen — se
+verificaron con eventos sintéticos, ver más abajo).
 
-## Cómo se verificó (sin los servicios de Tefi)
+## Cómo se verificó
 
-1. **Pruebas unitarias** (no requieren Docker ni Redis real, usan `fakeredis`):
+1. **Pruebas unitarias** de la parte coreografiada (no requieren Docker ni Redis
+   real, usan `fakeredis`):
    ```bash
    cd services/pasarela-interbancaria && .venv/Scripts/python -m pytest
    cd services/gateway-coreografia && .venv/Scripts/python -m pytest
    ```
-   Cubren CP-01 a CP-05 simulando a Cuentas/Riesgo como "dobles" que respetan el
-   contrato de eventos (así se prueba el aislamiento real de cada servicio).
+   Cubren CP-01 a CP-05 simulando a `accounts`/`risk` como "dobles" que respetan
+   el contrato de eventos (así se prueba el aislamiento real de cada servicio).
 
-2. **Verificación E2E contra el stack real** (Docker + Redis real + la Pasarela
-   real reaccionando con su delay de 2-4s):
+2. **Coreografía E2E contra el stack real** (Docker + Redis real + la Pasarela
+   real con su delay de 2-4s):
    ```bash
    docker compose up -d redis pasarela-interbancaria gateway-coreografia
    python scripts/probar_cp_coreografia.py
    ```
-   Este script simula únicamente lo que Cuentas y Riesgo publicarían, y deja que
-   la Pasarela real (Yuly) reaccione de verdad — confirmado pasando los 5 CP.
+   Simula únicamente lo que `accounts`/`risk` publicarían, y deja que la
+   Pasarela real reaccione de verdad — confirmado pasando los 5 CP.
 
-3. **Frontend en navegador** contra el stack real: transferencia enviada desde la
-   UI, estado inicial `EN_EJECUCION`, eventos simulados de Cuentas/Riesgo vía
-   Redis, la Pasarela real resuelve tras su delay, y el timeline del frontend
-   muestra cada paso hasta `CONFIRMADO` (CP-01) y `RECHAZADO_RED` con
-   compensaciones (CP-04).
+3. **Orquestación E2E contra el stack real** (Prefect + accounts + risk +
+   clearing-stub, sin ningún doble de prueba):
+   ```bash
+   docker compose up -d --build
+   curl -X POST http://localhost:8001/cuentas -H "Content-Type: application/json" -d '{"numero_cuenta":"CTA-001","saldo_inicial":1000}'
+   curl -X POST http://localhost:8001/cuentas -H "Content-Type: application/json" -d '{"numero_cuenta":"CTA-002","saldo_inicial":100}'
+   curl -X POST http://localhost:8200/transferencia -H "Content-Type: application/json" -d '{"origen":"CTA-001","destino":"CTA-002","monto":100}'
+   # copiar el idempotency_key de la respuesta y consultar:
+   curl http://localhost:8200/transferencia/<idempotency_key>/estado
+   ```
+   Los 5 CP se probaron así manualmente (CP-01 → CONFIRMADO, CP-02 →
+   RECHAZADO_FONDOS, CP-03 → RECHAZADO_RIESGO con compensación, CP-04 →
+   RECHAZADO_RED con doble compensación, CP-05 → mismo idempotency_key no
+   duplica la ejecución).
+
+4. **Frontend en navegador** contra el stack real, en ambos modos: transferencia
+   enviada desde la UI, estado inicial `EN_EJECUCION`, y el timeline mostrando
+   cada paso hasta el estado final — confirmado en Coreografiada (CP-01 hasta
+   `CONFIRMADO`, CP-04 hasta `RECHAZADO_RED`) y en Orquestada (CP-01 hasta
+   `CONFIRMADO` con los 4 pasos reales de accounts/risk/clearing-stub).
 
 ## Documentos del taller
 

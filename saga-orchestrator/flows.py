@@ -1,11 +1,12 @@
+import os
 import time
 import sys
 import requests
 from prefect import flow, task
 
-ACCOUNTS_URL = "http://127.0.0.1:8001"
-RISK_URL = "http://127.0.0.1:8002"
-CLEARING_URL = "http://127.0.0.1:8003"
+ACCOUNTS_URL = os.getenv("ACCOUNTS_URL", "http://127.0.0.1:8001")
+RISK_URL = os.getenv("RISK_URL", "http://127.0.0.1:8002")
+CLEARING_URL = os.getenv("CLEARING_URL", "http://127.0.0.1:8003")
 
 DELAY = 3
 
