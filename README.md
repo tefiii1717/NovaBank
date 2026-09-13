@@ -5,7 +5,7 @@ Taller de arquitectura: transferencias interbancarias implementadas con el
 coordinador central) y **Orquestada** (Prefect) — con compensaciones en orden
 inverso y observabilidad de cada paso.
 
-Equipo: Tefi (orquestación + observabilidad Prefect) y Yuly (frontend, pasarela
+Equipo: Sofía (orquestación + observabilidad Prefect) y Yuly (frontend, pasarela
 interbancaria, bus de eventos y saga coreografiada).
 
 ## Estado actual del repositorio
@@ -16,21 +16,20 @@ interbancaria, bus de eventos y saga coreografiada).
 | `services/pasarela-interbancaria/` (Clearing Gateway, reactiva a eventos) | Yuly | ✅ Implementado |
 | `services/gateway-coreografia/` (entrypoint + read model de la saga coreografiada) | Yuly | ✅ Implementado |
 | `docs/CONTRATO_EVENTOS.md` (contrato de eventos y API) | Yuly | ✅ Implementado |
-| `services/accounts/` (Cuentas y Saldos) | Tefi | ✅ Implementado |
-| `services/risk/` (Riesgo y Antifraude) | Tefi | ✅ Implementado |
-| `services/clearing-stub/` (stub de pasarela para el modo orquestado) | Tefi | ✅ Implementado |
-| `saga-orchestrator/flows.py` (saga orquestada con Prefect) | Tefi | ✅ Implementado |
-| `saga-orchestrator/api.py` (API Gateway orquestada, puerto `:8200`) | Yuly (wrapper sobre el flow de Tefi) | ✅ Implementado |
+| `services/accounts/` (Cuentas y Saldos) | Sofía | ✅ Implementado |
+| `services/risk/` (Riesgo y Antifraude) | Sofía | ✅ Implementado |
+| `services/clearing-stub/` (stub de pasarela para el modo orquestado) | Sofía | ✅ Implementado |
+| `saga-orchestrator/flows.py` (saga orquestada con Prefect) | Sofía | ✅ Implementado |
+| `saga-orchestrator/api.py` (API Gateway orquestada, puerto `:8200`) | Yuly (wrapper sobre el flow de Sofía) | ✅ Implementado |
+| `services/accounts/redis_listener.py`, `services/risk/redis_listener.py` (reacción a `saga.eventos`) | Yuly (agregado sobre el código de Sofía) | ✅ Implementado |
 
 **Los dos modos (Coreografiada y Orquestada) funcionan de punta a punta contra
-el stack real** — verificado con los 5 casos de prueba en ambos modos (ver
-"Cómo se verificó" más abajo). La única limitación conocida: `accounts` y
-`risk` todavía solo responden a llamadas HTTP directas (para la orquestación);
-no escuchan `saga.eventos` en Redis, así que el modo Coreografiada se probó con
-eventos sintéticos que simulan lo que esos dos servicios emitirían (ver
-`docs/CONTRATO_EVENTOS.md` y `scripts/probar_cp_coreografia.py`) — conectarlos
-de verdad al bus de eventos es el próximo paso para que la coreografía corra
-100% con servicios reales en vez de dobles de prueba.
+el stack real, con los 5 casos de prueba pasando en ambos y sin ningún evento
+o servicio simulado** (ver "Cómo se verificó" más abajo). `accounts` y `risk`
+ahora exponen dos caminos hacia la misma lógica de negocio: sus endpoints HTTP
+de siempre (que usa el flow orquestado) y un listener de Redis que reacciona
+solo a `saga.eventos` (que completa la coreografía) — ver
+`docs/CONTRATO_EVENTOS.md`.
 
 ## Arquitectura (las 4 capas del taller)
 
@@ -41,7 +40,7 @@ de verdad al bus de eventos es el próximo paso para que la coreografía corra
    (puerto `8100`); en modo orquestado es `saga-orchestrator/api.py` (puerto
    `8200`) — mismo contrato HTTP en ambos, ver `docs/CONTRATO_EVENTOS.md` §6.
 3. **Microservicios de dominio bancario**: `pasarela-interbancaria` (Yuly) +
-   `accounts` y `risk` (Tefi) + `clearing-stub` (Tefi, pasarela síncrona para
+   `accounts` y `risk` (Sofía) + `clearing-stub` (Sofía, pasarela síncrona para
    el flow orquestado).
 4. **Observabilidad**: en coreografía, cada paso queda en la tabla `historial`
    de `gateway-coreografia` con timestamp y servicio de origen; en
@@ -93,11 +92,10 @@ cd frontend && npm install && npm run dev
 | CP-04 | Timeout de red externa | Activar "CP-04 · Forzar timeout de red" |
 | CP-05 | Idempotencia / reintento | Botón "Reusar último ID (CP-05)" y reenviar |
 
-Los 5 casos están verificados contra el modo **Orquestada** real (Prefect +
-accounts + risk + clearing-stub, sin dobles de prueba). En **Coreografiada**,
-CP-04 y CP-05 corren contra la Pasarela real; CP-01/02/03 necesitan que
-`accounts`/`risk` reaccionen a `saga.eventos` (todavía no lo hacen — se
-verificaron con eventos sintéticos, ver más abajo).
+Los 5 casos están verificados contra **ambos modos reales**, sin dobles de
+prueba: Orquestada (Prefect + accounts + risk + clearing-stub) y Coreografiada
+(gateway-coreografia + accounts + risk + pasarela-interbancaria, todos
+reaccionando solos vía Redis).
 
 ## Cómo se verificó
 
@@ -110,14 +108,15 @@ verificaron con eventos sintéticos, ver más abajo).
    Cubren CP-01 a CP-05 simulando a `accounts`/`risk` como "dobles" que respetan
    el contrato de eventos (así se prueba el aislamiento real de cada servicio).
 
-2. **Coreografía E2E contra el stack real** (Docker + Redis real + la Pasarela
-   real con su delay de 2-4s):
+2. **Coreografía E2E contra el stack real** (Docker completo — redis, accounts,
+   risk, pasarela-interbancaria y gateway-coreografia, todos reales, ningún
+   evento simulado):
    ```bash
-   docker compose up -d redis pasarela-interbancaria gateway-coreografia
+   docker compose up -d --build
    python scripts/probar_cp_coreografia.py
    ```
-   Simula únicamente lo que `accounts`/`risk` publicarían, y deja que la
-   Pasarela real reaccione de verdad — confirmado pasando los 5 CP.
+   Crea las cuentas de prueba y corre los 5 CP contra el bus de eventos real
+   — accounts y risk reaccionan solos, sin que el script les diga qué hacer.
 
 3. **Orquestación E2E contra el stack real** (Prefect + accounts + risk +
    clearing-stub, sin ningún doble de prueba):
@@ -136,9 +135,8 @@ verificaron con eventos sintéticos, ver más abajo).
 
 4. **Frontend en navegador** contra el stack real, en ambos modos: transferencia
    enviada desde la UI, estado inicial `EN_EJECUCION`, y el timeline mostrando
-   cada paso hasta el estado final — confirmado en Coreografiada (CP-01 hasta
-   `CONFIRMADO`, CP-04 hasta `RECHAZADO_RED`) y en Orquestada (CP-01 hasta
-   `CONFIRMADO` con los 4 pasos reales de accounts/risk/clearing-stub).
+   los 4 pasos reales (accounts → risk → pasarela/clearing) hasta `CONFIRMADO`
+   — confirmado tanto en Coreografiada como en Orquestada.
 
 ## Documentos del taller
 

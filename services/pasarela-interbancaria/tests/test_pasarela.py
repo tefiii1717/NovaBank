@@ -1,7 +1,7 @@
 """
 Pruebas de la Pasarela Interbancaria en aislamiento total (sin Cuentas ni Riesgo reales):
 se le inyecta un Redis falso (fakeredis) y se publican eventos `RiesgoAprobado` sintéticos
-directamente, tal como lo haría el servicio de Riesgo de Tefi en producción.
+directamente, tal como lo haría el servicio de Riesgo de Sofía en producción.
 
 Cubre:
 - Liquidación exitosa -> LiquidacionConfirmada (camino feliz de la pasarela)

@@ -1,12 +1,9 @@
 # Stack completo NovaBank: servicios de Yuly (frontend, coreografía, pasarela) +
-# servicios de Tefi (cuentas, riesgo, saga orquestada con Prefect). Ver
+# servicios de Sofía (cuentas, riesgo, saga orquestada con Prefect). Ver
 # docs/CONTRATO_EVENTOS.md para el contrato de eventos/API compartido.
 #
-# LIMITACIÓN CONOCIDA (ver README.md "Estado actual"):
-#   - accounts y risk todavía no escuchan saga.eventos en Redis, así que el modo
-#     Coreografiada del frontend no tiene con quién completar la saga real
-#     todavía (se probó con eventos sintéticos, ver scripts/probar_cp_coreografia.py).
-#     El modo Orquestada sí queda completo: :8200 expone el flow de Prefect.
+# accounts y risk exponen HTTP directo (para la orquestación) Y escuchan
+# saga.eventos en Redis (para la coreografía) — ver redis_listener.py en cada uno.
 
 services:
   redis:
@@ -61,19 +58,29 @@ services:
     depends_on:
       - gateway-coreografia
 
-  # --- Servicios de Tefi ---------------------------------------------------
+  # --- Servicios de Sofía ---------------------------------------------------
 
   accounts:
     build: ./services/accounts
     container_name: novabank-accounts
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   risk:
     build: ./services/risk
     container_name: novabank-risk
+    environment:
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8002:8002"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   clearing-stub:
     build: ./services/clearing-stub

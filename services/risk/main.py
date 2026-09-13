@@ -17,54 +17,61 @@ class ValidarRiesgoRequest(BaseModel):
     forzar_fraude: bool = False
 
 
-@app.post("/validar-riesgo")
-def validar_riesgo(req: ValidarRiesgoRequest, db: Session = Depends(get_db)):
+def _validar_riesgo(db: Session, numero_cuenta: str, monto: float, idempotency_key: str, forzar_fraude: bool) -> dict:
+    """Lógica pura de validación, reutilizada por el endpoint HTTP (orquestación)
+    y por el listener de Redis (coreografía, reacciona a SaldoDebitado) — ver
+    redis_listener.py."""
     ya_procesada = db.query(RiskValidation).filter(
-        RiskValidation.idempotency_key == req.idempotency_key
+        RiskValidation.idempotency_key == idempotency_key
     ).first()
     if ya_procesada:
         return {"status": "duplicado", "resultado": ya_procesada.resultado}
 
-    if req.forzar_fraude:
+    if forzar_fraude:
         registro = RiskValidation(
-            idempotency_key=req.idempotency_key,
-            numero_cuenta=req.numero_cuenta,
-            monto=req.monto,
-            resultado="RECHAZADO_RIESGO"
+            idempotency_key=idempotency_key, numero_cuenta=numero_cuenta,
+            monto=monto, resultado="RECHAZADO_RIESGO",
         )
         db.add(registro)
         db.commit()
-        raise HTTPException(status_code=400, detail="RECHAZADO_RIESGO")
+        return {"status": "rechazado", "motivo": "fraude_detectado"}
 
-    if req.monto > LIMITE_DIARIO:
+    if monto > LIMITE_DIARIO:
         registro = RiskValidation(
-            idempotency_key=req.idempotency_key,
-            numero_cuenta=req.numero_cuenta,
-            monto=req.monto,
-            resultado="RECHAZADO_RIESGO"
+            idempotency_key=idempotency_key, numero_cuenta=numero_cuenta,
+            monto=monto, resultado="RECHAZADO_RIESGO",
         )
         db.add(registro)
         db.commit()
-        raise HTTPException(status_code=400, detail="RECHAZADO_RIESGO: excede limite diario")
+        return {"status": "rechazado", "motivo": "limite_diario_excedido"}
 
     registro = RiskValidation(
-        idempotency_key=req.idempotency_key,
-        numero_cuenta=req.numero_cuenta,
-        monto=req.monto,
-        resultado="APROBADO"
+        idempotency_key=idempotency_key, numero_cuenta=numero_cuenta,
+        monto=monto, resultado="APROBADO",
     )
     db.add(registro)
     db.commit()
     return {"status": "ok", "resultado": "APROBADO"}
 
 
+@app.post("/validar-riesgo")
+def validar_riesgo(req: ValidarRiesgoRequest, db: Session = Depends(get_db)):
+    resultado = _validar_riesgo(db, req.numero_cuenta, req.monto, req.idempotency_key, req.forzar_fraude)
+    if resultado["status"] == "rechazado":
+        detalle = (
+            "RECHAZADO_RIESGO" if resultado["motivo"] == "fraude_detectado"
+            else "RECHAZADO_RIESGO: excede limite diario"
+        )
+        raise HTTPException(status_code=400, detail=detalle)
+    return resultado
+
+
 class AnularRequest(BaseModel):
     idempotency_key: str
 
 
-@app.post("/anular-riesgo")
-def anular_riesgo(req: AnularRequest, db: Session = Depends(get_db)):
-    clave_anulacion = f"anulacion-{req.idempotency_key}"
+def _anular_riesgo(db: Session, idempotency_key: str) -> dict:
+    clave_anulacion = f"anulacion-{idempotency_key}"
     ya_procesada = db.query(RiskValidation).filter(
         RiskValidation.idempotency_key == clave_anulacion
     ).first()
@@ -72,11 +79,19 @@ def anular_riesgo(req: AnularRequest, db: Session = Depends(get_db)):
         return {"status": "duplicado", "resultado": ya_procesada.resultado}
 
     registro = RiskValidation(
-        idempotency_key=clave_anulacion,
-        numero_cuenta="N/A",
-        monto=0.0,
-        resultado="ANULADO"
+        idempotency_key=clave_anulacion, numero_cuenta="N/A", monto=0.0, resultado="ANULADO",
     )
     db.add(registro)
     db.commit()
     return {"status": "ok", "resultado": "ANULADO"}
+
+
+@app.post("/anular-riesgo")
+def anular_riesgo(req: AnularRequest, db: Session = Depends(get_db)):
+    return _anular_riesgo(db, req.idempotency_key)
+
+
+@app.on_event("startup")
+def _iniciar_listener_redis() -> None:
+    from redis_listener import iniciar_en_segundo_plano
+    iniciar_en_segundo_plano()

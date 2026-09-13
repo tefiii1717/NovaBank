@@ -1,6 +1,6 @@
 // Debe coincidir exactamente con docs/CONTRATO_EVENTOS.md — así el frontend
 // pinta el mismo resultado sin importar si la saga la resolvió el modo
-// orquestado (Tefi/Prefect) o el coreografiado (Yuly/Redis).
+// orquestado (Sofía/Prefect) o el coreografiado (Yuly/Redis).
 
 export const ESTADOS = {
   EN_EJECUCION: { etiqueta: "En ejecución", color: "bg-amber-100 text-amber-800 border-amber-300" },

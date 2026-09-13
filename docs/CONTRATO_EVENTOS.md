@@ -1,6 +1,6 @@
 # Contrato de Eventos y API — Saga Bancaria NovaBank
 
-Este documento es la fuente de verdad que **ambos** integrantes del equipo (Tefi y Yuly)
+Este documento es la fuente de verdad que **ambos** integrantes del equipo (Sofía y Yuly)
 deben respetar para que la Saga Coreografiada y la Saga Orquestada sean intercambiables
 desde el frontend, y para que cualquier servicio pueda ser implementado o reemplazado
 sin romper a los demás.
@@ -122,7 +122,7 @@ GET /transferencia/{idempotency_key}/estado
   200: { "idempotency_key": str, "estado": str, "historial": [ {tipo, timestamp, origen_servicio} ] }
 ```
 
-### Modo Orquestado — expuesto por Tefi (puerto `8200`, mismo contrato de request/response)
+### Modo Orquestado — expuesto por Sofía (puerto `8200`, mismo contrato de request/response)
 
 El frontend usa el **mismo body y la misma forma de respuesta** contra la URL base que
 corresponda al modo elegido (`Orquestada` -> `:8200`, `Coreografiada` -> `:8100`), y hace

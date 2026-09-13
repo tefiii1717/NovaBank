@@ -42,16 +42,16 @@ servicio reactivo (la Pasarela, por ejemplo) además marca en Redis
 `procesado:{idempotency_key}:{tipo}` antes de actuar, por si el mismo evento
 llegara duplicado por el bus.
 
-## Orquestación (Tefi) — `services/saga-orquestada` (Prefect) + servicios de Cuentas y Riesgo
+## Orquestación (Sofía) — `services/saga-orquestada` (Prefect) + servicios de Cuentas y Riesgo
 
-*(Sección a completar por Tefi con su implementación: cómo el flow de Prefect llama
+*(Sección a completar por Sofía con su implementación: cómo el flow de Prefect llama
 explícitamente a cada `@task`, cómo se ve la ejecución en la UI de Prefect, y cómo
 se disparan las compensaciones en orden inverso desde el propio flow cuando una
 `task` falla.)*
 
 ## Conclusión comparativa
 
-| Criterio | Coreografía (Yuly) | Orquestación (Tefi) |
+| Criterio | Coreografía (Yuly) | Orquestación (Sofía) |
 |---|---|---|
 | Acoplamiento | Bajo — solo al contrato de eventos | Alto — el orquestador conoce a todos los servicios |
 | Punto único de fallo | No | Sí (si el orquestador cae a mitad de flujo) |
